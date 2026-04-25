@@ -1,0 +1,19 @@
+Raport Błędu
+Tytuł błędu: (np. Gracz przenika przez ścianę w menu głównym)
+Priorytet: (Niski / Średni / Wysoki / Krytyczny)
+
+Opis błędu
+Krótki opis tego, co się dzieje nie tak.
+
+Kroki do reprodukcji (Jak to powtórzyć?)
+Wejdź w...
+
+Kliknij na...
+
+Użyj klawisza...
+
+Wynik: (Co się stało?)
+
+Oczekiwany wynik: (Co powinno się stać?)
+
+Jak nie wiesz jak coś opisać to nagraj film i mi wyślij na discordzie
