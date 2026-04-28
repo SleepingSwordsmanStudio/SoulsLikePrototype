@@ -8,31 +8,47 @@ public class PlayerBrain : MonoBehaviour
     public PlayerDodgeSystem dodge;
     public LockOnSystem lockOn;
     public PlayerClimbing climbing;
+    public Animator animator; // Dodana referencja do Animatora
 
     [Header("Global State")]
     public bool isGrounded;
+    public bool isMeditating; // Nowy stan logiczny
 
     void Update()
     {
-        // 1. Odczyt wejścia
+        // Pobieramy stan z animatora
+        if (animator != null)
+        {
+            isMeditating = animator.GetBool("IsMeditating");
+        }
+
+        // 1. ZABLOKOWANE WEJŚCIE (Jeśli siedzi, nie czytamy inputu walki/ruchu)
+        if (isMeditating)
+        {
+            // Opcjonalnie: zerujemy wartości w PlayerInput, aby postać nie "pamiętała" kierunku ruchu
+            // input.ClearInput(); 
+            return; // PRZERWANIU UPDATE - nic poniżej się nie wykona, gdy gracz siedzi
+        }
+
+        // --- RESZTA LOGIKI (wykona się tylko, gdy isMeditating == false) ---
+
+        // 2. Odczyt wejścia
         input.ReadInput();
         
-        // 2. Aktualizacja stanu uziemienia
+        // 3. Aktualizacja stanu uziemienia
         isGrounded = Physics.CheckSphere(transform.position + move.groundCheckOffset, move.groundCheckDistance, move.groundLayer);
 
-        // 3. Logika systemów (Ticki)
+        // 4. Logika systemów (Ticki)
         lockOn.Tick();
         climbing.Tick();
 
-        // 4. Zarządzanie Unikiem
-        // Unik zablokowany, jeśli gracz się wspina lub jest w trakcie animacji startu wspinaczki
+        // 5. Zarządzanie Unikiem
         if (!climbing.isClimbing && !climbing.isStartingClimb)
         {
             dodge.TickDodge(lockOn.IsLockedOn);
         }
 
-        // 5. Skok i Animator
-        // Wyłączone podczas wspinaczki i uniku, aby zapobiec konfliktom stanów
+        // 6. Skok i Animator
         if (!dodge.IsDodging && !climbing.isClimbing)
         {
             move.HandleJump(isGrounded);
@@ -42,14 +58,17 @@ public class PlayerBrain : MonoBehaviour
 
     void FixedUpdate()
     {
+        // Jeśli siedzi, nie wykonujemy fizyki ruchu
+        if (isMeditating) return;
+
         // PRIORYTETY FIZYKI:
 
-        // Priorytet 1: Wspinaczka (Przejmuje kontrolę nad RB, wyłącza grawitację)
+        // Priorytet 1: Wspinaczka
         if (climbing.isClimbing)
         {
             climbing.FixedTick();
         }
-        // Priorytet 2: Ruch standardowy (Tylko jeśli nie trwa unik/roll)
+        // Priorytet 2: Ruch standardowy
         else if (!dodge.IsDodging)
         {
             move.ExecutePhysics(lockOn.IsLockedOn, lockOn.currentTarget);

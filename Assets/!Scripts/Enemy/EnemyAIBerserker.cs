@@ -31,32 +31,65 @@ public class EnemyAIBerserker : MonoBehaviour
     public float retreatSpeed = 3.0f;
     public float attackDashForce = 7f;
 
+    [Header("Detekcja Ziemi")]
+    public LayerMask groundLayer;
+    public float groundCheckDistance = 0.3f;
+
     private Animator anim;
     private Rigidbody rb;
+    private PullableObject pullable;
     private float lastAttackTime;
     private bool canAction = true;
     private bool isDead = false;
+
+    private readonly int hashSpeed = Animator.StringToHash("speed");
+    private readonly int hashIsStaggered = Animator.StringToHash("IsStaggered");
+    private readonly int hashOnGround = Animator.StringToHash("OnGround");
+    private readonly int hashVertVel = Animator.StringToHash("VerticalVelocity");
 
     void Start()
     {
         anim = GetComponent<Animator>();
         rb = GetComponent<Rigidbody>();
+        pullable = GetComponent<PullableObject>();
 
+        if (groundLayer == 0) groundLayer = LayerMask.GetMask("Default");
         if (playerTarget == null)
             playerTarget = GameObject.FindGameObjectWithTag("Player")?.transform;
 
         if (enemyWeapon != null) enemyWeapon.StopAttack();
     }
 
-    void Update()
+    void FixedUpdate()
     {
-        if (isDead || !canAction || playerTarget == null) return;
+        if (isDead) return;
+
+        if (pullable != null && pullable.isCaptured)
+        {
+            rb.useGravity = false;
+            rb.linearVelocity = Vector3.zero;
+            UpdateAirborneState();
+            return;
+        }
+
+        rb.useGravity = true;
+        bool grounded = CheckIfGrounded();
+
+        if (!canAction || playerTarget == null)
+        {
+            if (currentState != EnemyState.Attack)
+                rb.linearVelocity = new Vector3(0, rb.linearVelocity.y, 0);
+            
+            UpdateAnimator(grounded);
+            return;
+        }
 
         float distanceToPlayer = Vector3.Distance(transform.position, playerTarget.position);
 
         switch (currentState)
         {
             case EnemyState.Idle:
+                rb.linearVelocity = new Vector3(0, rb.linearVelocity.y, 0);
                 if (distanceToPlayer < detectionRange) currentState = EnemyState.Chase;
                 break;
 
@@ -67,15 +100,9 @@ public class EnemyAIBerserker : MonoBehaviour
             case EnemyState.Retreat:
                 HandleRetreat(distanceToPlayer);
                 break;
-
-            case EnemyState.Attack:
-                break;
-
-            case EnemyState.Stagger:
-                break;
         }
 
-        UpdateAnimator();
+        UpdateAnimator(grounded);
     }
 
     void HandleChase(float dist)
@@ -84,11 +111,17 @@ public class EnemyAIBerserker : MonoBehaviour
 
         if (dist > attackRange)
         {
-            MoveInDirection((playerTarget.position - transform.position).normalized, chaseSpeed);
+            Vector3 dir = (playerTarget.position - transform.position).normalized;
+            MoveInDirection(dir, chaseSpeed);
         }
         else if (Time.time >= lastAttackTime + attackCooldown)
         {
+            rb.linearVelocity = Vector3.zero;
             StartCoroutine(AttackComboRoutine());
+        }
+        else
+        {
+            rb.linearVelocity = new Vector3(0, rb.linearVelocity.y, 0);
         }
     }
 
@@ -131,18 +164,18 @@ public class EnemyAIBerserker : MonoBehaviour
         anim.SetInteger("ComboIndex", index);
         anim.SetTrigger("Attack");
 
-        Vector3 dashDir = (playerTarget.position - transform.position).normalized;
-        float timer = 0.2f;
-        
         if (enemyWeapon != null) enemyWeapon.StartAttack();
 
+        float timer = 0.25f;
         while (timer > 0)
         {
-            MoveInDirection(dashDir, attackDashForce);
+            Vector3 dashDir = (playerTarget.position - transform.position).normalized;
+            rb.linearVelocity = new Vector3(dashDir.x * attackDashForce, rb.linearVelocity.y, dashDir.z * attackDashForce);
             timer -= Time.deltaTime;
             yield return null;
         }
 
+        rb.linearVelocity = new Vector3(0, rb.linearVelocity.y, 0);
         yield return new WaitForSeconds(0.4f);
         if (enemyWeapon != null) enemyWeapon.StopAttack();
     }
@@ -158,9 +191,9 @@ public class EnemyAIBerserker : MonoBehaviour
     {
         canAction = false;
         currentState = EnemyState.Stagger;
+        rb.linearVelocity = Vector3.zero;
         
         if (anim != null) anim.SetTrigger(staggerTrigger);
-
         yield return new WaitForSeconds(staggerDuration);
 
         canAction = true;
@@ -170,12 +203,7 @@ public class EnemyAIBerserker : MonoBehaviour
     public void TakeDamage(int damage)
     {
         if (isDead) return;
-
-        if (currentState == EnemyState.Stagger)
-        {
-            Debug.Log("Berserker damaged while staggered!");
-        }
-        else
+        if (currentState != EnemyState.Stagger)
         {
             anim.SetTrigger(flinchTrigger);
         }
@@ -184,7 +212,9 @@ public class EnemyAIBerserker : MonoBehaviour
     void MoveInDirection(Vector3 dir, float speed)
     {
         dir.y = 0;
-        transform.position += dir * speed * Time.deltaTime;
+        Vector3 vel = dir * speed;
+        vel.y = rb.linearVelocity.y;
+        rb.linearVelocity = vel;
     }
 
     void LookAtTarget(Vector3 target)
@@ -194,11 +224,24 @@ public class EnemyAIBerserker : MonoBehaviour
         if (dir != Vector3.zero)
         {
             Quaternion targetRot = Quaternion.LookRotation(dir);
-            transform.rotation = Quaternion.Slerp(transform.rotation, targetRot, rotationSpeed * Time.deltaTime);
+            rb.MoveRotation(Quaternion.Slerp(rb.rotation, targetRot, rotationSpeed * Time.fixedDeltaTime));
         }
     }
 
-    void UpdateAnimator()
+    bool CheckIfGrounded()
+    {
+        return Physics.Raycast(transform.position + Vector3.up * 0.1f, Vector3.down, groundCheckDistance, groundLayer);
+    }
+
+    void UpdateAirborneState()
+    {
+        if (anim == null) return;
+        anim.SetBool(hashOnGround, false);
+        anim.SetFloat(hashVertVel, -5.0f);
+        anim.SetFloat(hashSpeed, 0f);
+    }
+
+    void UpdateAnimator(bool grounded)
     {
         if (anim == null) return;
 
@@ -206,7 +249,9 @@ public class EnemyAIBerserker : MonoBehaviour
         if (currentState == EnemyState.Chase) speedVal = 1f;
         else if (currentState == EnemyState.Retreat) speedVal = -0.5f;
 
-        anim.SetFloat("speed", speedVal, 0.1f, Time.deltaTime);
-        anim.SetBool("IsStaggered", currentState == EnemyState.Stagger);
+        anim.SetFloat(hashSpeed, speedVal, 0.1f, Time.fixedDeltaTime);
+        anim.SetBool(hashIsStaggered, currentState == EnemyState.Stagger);
+        anim.SetBool(hashOnGround, grounded);
+        anim.SetFloat(hashVertVel, rb.linearVelocity.y);
     }
 }

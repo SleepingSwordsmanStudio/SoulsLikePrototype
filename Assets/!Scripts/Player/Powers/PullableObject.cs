@@ -7,16 +7,16 @@ public class PullableObject : MonoBehaviour
 
     public bool isCaptured { get; private set; }
 
-    private EnemyGravity gravityScript;
     private Transform anchor;
     private bool isPulled;
     private bool isPinned;
     private Collider enemyCollider;
+    private Rigidbody rb;
 
     void Start()
     {
-        gravityScript = GetComponent<EnemyGravity>();
         enemyCollider = GetComponent<Collider>();
+        rb = GetComponent<Rigidbody>();
     }
 
     void Update()
@@ -25,7 +25,6 @@ public class PullableObject : MonoBehaviour
 
         if (!isPinned)
         {
-            // FAZA 1: PRZYCIĄGANIE (Gładki dolot do dłoni)
             transform.position = Vector3.MoveTowards(transform.position, anchor.position, pullSpeed * Time.deltaTime);
             transform.rotation = Quaternion.Slerp(transform.rotation, anchor.rotation, 8f * Time.deltaTime);
 
@@ -36,7 +35,6 @@ public class PullableObject : MonoBehaviour
         }
         else
         {
-            // FAZA 2: TRZYMANIE (Sztywne przypięcie)
             transform.position = anchor.position;
             transform.rotation = anchor.rotation;
         }
@@ -49,9 +47,13 @@ public class PullableObject : MonoBehaviour
         transform.localPosition = Vector3.zero;
         transform.localRotation = Quaternion.identity;
 
-        // Zamieniamy na Trigger podczas trzymania, aby nie "wypychał" gracza fizycznie,
-        // ale miecz nadal go wykryje (OnTriggerEnter).
         if (enemyCollider != null) enemyCollider.isTrigger = true;
+        if (rb != null)
+        {
+            rb.useGravity = false;
+            rb.linearVelocity = Vector3.zero;
+            rb.angularVelocity = Vector3.zero;
+        }
     }
 
     public void StartPull(Transform targetAnchor)
@@ -63,9 +65,12 @@ public class PullableObject : MonoBehaviour
         isPulled = true;
         isPinned = false;
 
-        if (gravityScript != null) gravityScript.enabled = false;
-        // W locie też ustawiamy trigger, żeby nie blokował gracza
         if (enemyCollider != null) enemyCollider.isTrigger = true;
+        if (rb != null)
+        {
+            rb.useGravity = false;
+            rb.linearVelocity = Vector3.zero;
+        }
     }
 
     public void StopPull()
@@ -77,8 +82,10 @@ public class PullableObject : MonoBehaviour
 
         transform.SetParent(null);
 
-        // Powrót do normalnej fizyki
         if (enemyCollider != null) enemyCollider.isTrigger = false;
-        if (gravityScript != null) gravityScript.enabled = true;
+        if (rb != null)
+        {
+            rb.useGravity = true;
+        }
     }
 }

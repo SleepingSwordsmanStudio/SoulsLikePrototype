@@ -81,7 +81,9 @@ public class PlayerCombat : MonoBehaviour
     {
         if (attackLayerIndex == -1) return;
 
-        if (climbing != null && climbing.isClimbing)
+        bool isMeditating = animator.GetBool("IsMeditating");
+
+        if ((climbing != null && climbing.isClimbing) || isMeditating)
         {
             ForceStopCombat();
             UpdateWeaponVisibility(false);
@@ -105,6 +107,8 @@ public class PlayerCombat : MonoBehaviour
 
     void FixedUpdate()
     {
+        if (animator.GetBool("IsMeditating")) return;
+
         if (IsAttacking && softTarget != null)
         {
             Vector3 dirToEnemy = (softTarget.position - transform.position).normalized;
@@ -234,6 +238,8 @@ public class PlayerCombat : MonoBehaviour
 
     public void TakeDamage(int dmg)
     {
+        if (animator.GetBool("IsMeditating")) return;
+
         if (parryTimer > 0)
         {
             animator.SetTrigger(parryTrigger);

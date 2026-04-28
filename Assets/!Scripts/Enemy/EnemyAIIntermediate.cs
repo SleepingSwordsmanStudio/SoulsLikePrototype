@@ -26,8 +26,12 @@ public class EnemyAIIntermediate : MonoBehaviour
     private float currentRandomCooldown;
 
     [Header("Pauza po Ataku")]
-    public float recoveryDuration = 0.5f; // Czas bezruchu po ataku
+    public float recoveryDuration = 0.5f; 
     private bool isRecovering = false;
+
+    [Header("Ustawienia Detekcji Ziemi")]
+    public LayerMask groundLayer;
+    public float groundCheckDistance = 0.3f;
 
     public float attackDuration = 0.7f;
     public WeaponHitbox enemyWeapon;    
@@ -42,85 +46,63 @@ public class EnemyAIIntermediate : MonoBehaviour
     public float rotationSpeed = 15.0f;
 
     private Animator anim;
-    private EnemyGravity gravityScript; 
+    private Rigidbody rb; 
     private PullableObject pullable; 
     
     private int currentWaypointIndex = 0;
     private bool isWaiting = false;
-    private Vector3 moveDirection = Vector3.zero;
+    private float waitTimer = 0f;
     private float lastAttackTime;
     private float orbitDirection = 1f; 
     private float nextOrbitDirChange;
     private bool isDashing = false;
 
+    private readonly int hashIsWalking = Animator.StringToHash("IsWalking");
+    private readonly int hashOnGround = Animator.StringToHash("OnGround");
+    private readonly int hashVertVel = Animator.StringToHash("VerticalVelocity");
+    private readonly int hashSpeed = Animator.StringToHash("speed");
+
     void Start()
     {
         anim = GetComponent<Animator>();
-        gravityScript = GetComponent<EnemyGravity>(); 
+        rb = GetComponent<Rigidbody>(); 
         pullable = GetComponent<PullableObject>();
 
-        if (playerTarget == null)
-            playerTarget = GameObject.FindGameObjectWithTag("Player")?.transform;
-
+        if (groundLayer == 0) groundLayer = LayerMask.GetMask("Default");
+        if (playerTarget == null) playerTarget = GameObject.FindGameObjectWithTag("Player")?.transform;
         if (eyeTransform == null) eyeTransform = transform;
+        
         currentRandomCooldown = Random.Range(minAttackCooldown, maxAttackCooldown);
         if (enemyWeapon != null) enemyWeapon.StopAttack();
     }
 
-    void Update()
+    void FixedUpdate()
     {
         if (pullable != null && pullable.isCaptured)
         {
+            rb.useGravity = false;
+            rb.linearVelocity = Vector3.zero;
             UpdateAirborneState();
-            return; 
+            return;
         }
 
-        // Jeśli szkielet odpoczywa po ciosie, nie wykonuj logiki ruchu
-        if (!isRecovering)
-        {
-            HandleLogic();
-        }
-        else
-        {
-            moveDirection = Vector3.zero; // Stój w miejscu podczas recovery
-        }
+        rb.useGravity = !isDashing;
+        bool grounded = CheckIfGrounded();
 
-        float currentSpeed = patrolSpeed;
-        if (currentState == EnemyState.Chase) currentSpeed = chaseSpeed;
-        else if (currentState == EnemyState.Orbiting) currentSpeed = orbitSpeed;
-        else if (currentState == EnemyState.Attack) currentSpeed = chaseSpeed * 0.3f;
-
-        // Ruch poziomy - zablokowany podczas recovery lub dasha
-        if (moveDirection.magnitude > 0.1f && !isDashing && !isRecovering)
+        if (isRecovering)
         {
-            ApplySafeMovement(moveDirection.normalized * currentSpeed * Time.deltaTime);
+            rb.linearVelocity = new Vector3(0, rb.linearVelocity.y, 0);
+            UpdateAnimator(grounded, rb.linearVelocity.y, false, 0f);
+            return;
         }
 
-        if (gravityScript != null && !isDashing)
+        if (!isDashing)
         {
-            float clampedVel = Mathf.Max(gravityScript.verticalVelocity, -15f);
-            Vector3 gravityMove = Vector3.up * clampedVel * Time.deltaTime;
-            transform.position += gravityMove;
-            ApplySafeMovement(Vector3.zero);
-        }
-
-        UpdateAnimator();
-    }
-
-    void ApplySafeMovement(Vector3 delta)
-    {
-        transform.position += delta;
-        RaycastHit hit;
-        if (Physics.Raycast(transform.position + Vector3.up * 0.5f, Vector3.down, out hit, 1.5f, obstructionMask))
-        {
-            if (transform.position.y < hit.point.y)
-            {
-                transform.position = new Vector3(transform.position.x, hit.point.y, transform.position.z);
-            }
+            HandleLogic(grounded);
         }
     }
 
-    void HandleLogic()
+    void HandleLogic(bool grounded)
     {
         if (playerTarget == null) return;
 
@@ -132,17 +114,11 @@ public class EnemyAIIntermediate : MonoBehaviour
         {
             if (attackReady)
             {
-                if (distanceToPlayer <= attackRange)
-                    currentState = EnemyState.Attack;
-                else
-                    currentState = EnemyState.Chase; 
+                currentState = (distanceToPlayer <= attackRange) ? EnemyState.Attack : EnemyState.Chase;
             }
             else
             {
-                if (distanceToPlayer <= orbitDistance + 1f)
-                    currentState = EnemyState.Orbiting;
-                else
-                    currentState = EnemyState.Chase;
+                currentState = (distanceToPlayer <= orbitDistance + 1f) ? EnemyState.Orbiting : EnemyState.Chase;
             }
         }
         else
@@ -152,14 +128,56 @@ public class EnemyAIIntermediate : MonoBehaviour
 
         switch (currentState)
         {
-            case EnemyState.Patrol: HandlePatrol(); break;
-            case EnemyState.Chase: HandleChase(); break;
-            case EnemyState.Orbiting: HandleOrbiting(); break;
-            case EnemyState.Attack: HandleAttack(); break;
+            case EnemyState.Patrol: HandlePatrol(grounded); break;
+            case EnemyState.Chase: HandleChase(grounded); break;
+            case EnemyState.Orbiting: HandleOrbiting(grounded); break;
+            case EnemyState.Attack: HandleAttack(grounded); break;
         }
     }
 
-    void HandleOrbiting()
+    void HandlePatrol(bool grounded)
+    {
+        if (waypoints.Count == 0)
+        {
+            rb.linearVelocity = new Vector3(0, rb.linearVelocity.y, 0);
+            UpdateAnimator(grounded, rb.linearVelocity.y, false, 0f);
+            return;
+        }
+
+        if (isWaiting)
+        {
+            waitTimer -= Time.fixedDeltaTime;
+            if (waitTimer <= 0) isWaiting = false;
+            rb.linearVelocity = new Vector3(0, rb.linearVelocity.y, 0);
+            UpdateAnimator(grounded, rb.linearVelocity.y, false, 0f);
+            return;
+        }
+
+        Vector3 target = waypoints[currentWaypointIndex].position;
+        Vector3 diff = target - transform.position;
+        diff.y = 0;
+
+        if (diff.magnitude < 0.8f)
+        {
+            isWaiting = true;
+            waitTimer = waitTimeAtPoint;
+            currentWaypointIndex = (currentWaypointIndex + 1) % waypoints.Count;
+        }
+        else
+        {
+            ApplyMovement(diff, patrolSpeed, grounded, 0.5f);
+        }
+    }
+
+    void HandleChase(bool grounded)
+    {
+        isWaiting = false;
+        Vector3 diff = playerTarget.position - transform.position;
+        diff.y = 0;
+        ApplyMovement(diff, chaseSpeed, grounded, 1.0f);
+    }
+
+    void HandleOrbiting(bool grounded)
     {
         LookAtTarget(playerTarget.position);
 
@@ -171,16 +189,17 @@ public class EnemyAIIntermediate : MonoBehaviour
 
         Vector3 dirToPlayer = (transform.position - playerTarget.position).normalized;
         Vector3 lateralDir = Vector3.Cross(dirToPlayer, Vector3.up) * orbitDirection;
-        
         Vector3 radialDir = Vector3.zero;
+        
         float dist = Vector3.Distance(transform.position, playerTarget.position);
         if (dist < orbitDistance - 0.5f) radialDir = dirToPlayer; 
         else if (dist > orbitDistance + 0.5f) radialDir = -dirToPlayer;
 
-        moveDirection = (lateralDir + radialDir * 0.5f).normalized;
+        Vector3 finalDir = (lateralDir + radialDir * 0.5f).normalized;
+        ApplyMovement(finalDir, orbitSpeed, grounded, 0.5f);
     }
 
-    void HandleAttack()
+    void HandleAttack(bool grounded)
     {
         LookAtTarget(playerTarget.position);
         
@@ -191,8 +210,7 @@ public class EnemyAIIntermediate : MonoBehaviour
                 anim.SetTrigger("Attack");
                 lastAttackTime = Time.time;
                 currentRandomCooldown = Random.Range(minAttackCooldown, maxAttackCooldown);
-                
-                StartCoroutine(AttackRoutine()); // Zmieniona korutyna
+                StartCoroutine(AttackRoutine());
 
                 if (enemyWeapon != null)
                 {
@@ -201,45 +219,50 @@ public class EnemyAIIntermediate : MonoBehaviour
                 }
             }
         }
+        rb.linearVelocity = new Vector3(0, rb.linearVelocity.y, 0);
+        UpdateAnimator(grounded, rb.linearVelocity.y, false, 0f);
     }
 
-    // Nowa korutyna łącząca Dash i Recovery
     System.Collections.IEnumerator AttackRoutine()
     {
-        // 1. FAZA DASH (Atak)
         isDashing = true;
-        if(gravityScript != null) gravityScript.verticalVelocity = 0; 
-
         float dashTime = 0.35f; 
         float timer = 0f;
         while (timer < dashTime)
         {
-            float distToPlayer = Vector3.Distance(transform.position, playerTarget.position);
-            if (distToPlayer > 1.2f)
+            if (Vector3.Distance(transform.position, playerTarget.position) > 1.2f)
             {
-                Vector3 dashDelta = transform.forward * 8.5f * Time.deltaTime;
-                ApplySafeMovement(dashDelta);
+                rb.linearVelocity = transform.forward * 8.5f;
             }
             timer += Time.deltaTime;
             yield return null;
         }
         isDashing = false;
-
-        // 2. FAZA RECOVERY (Pauza po ataku)
         isRecovering = true;
-        moveDirection = Vector3.zero;
+        rb.linearVelocity = Vector3.zero;
         yield return new WaitForSeconds(recoveryDuration);
         isRecovering = false;
     }
 
-    public void EnemyStopAttack() => enemyWeapon?.StopAttack();
+    void ApplyMovement(Vector3 direction, float mSpeed, bool grounded, float animSpeed)
+    {
+        if (direction.magnitude > 0.1f)
+        {
+            Quaternion targetRot = Quaternion.LookRotation(direction);
+            rb.MoveRotation(Quaternion.Slerp(rb.rotation, targetRot, rotationSpeed * Time.fixedDeltaTime));
+            Vector3 vel = transform.forward * mSpeed;
+            vel.y = rb.linearVelocity.y;
+            rb.linearVelocity = vel;
+            UpdateAnimator(grounded, rb.linearVelocity.y, true, animSpeed);
+        }
+    }
 
     void LookAtTarget(Vector3 target)
     {
         Vector3 dir = (target - transform.position);
         dir.y = 0;
         if (dir != Vector3.zero)
-            transform.rotation = Quaternion.Slerp(transform.rotation, Quaternion.LookRotation(dir), rotationSpeed * Time.deltaTime);
+            rb.MoveRotation(Quaternion.Slerp(rb.rotation, Quaternion.LookRotation(dir), rotationSpeed * Time.fixedDeltaTime));
     }
 
     bool IsPlayerInFieldOfView()
@@ -256,59 +279,38 @@ public class EnemyAIIntermediate : MonoBehaviour
         return dist < 4f; 
     }
 
+    bool CheckIfGrounded()
+    {
+        return Physics.Raycast(transform.position + Vector3.up * 0.1f, Vector3.down, groundCheckDistance, groundLayer);
+    }
+
     void UpdateAirborneState()
     {
         if (anim == null) return;
-        anim.SetBool("OnGround", false); 
-        anim.SetBool("IsWalking", false);
-        anim.SetFloat("speed", 0f);
+        anim.SetBool(hashOnGround, false); 
+        anim.SetBool(hashIsWalking, false);
+        anim.SetFloat(hashSpeed, 0f);
+        anim.SetFloat(hashVertVel, -5.0f);
     }
 
-    void UpdateAnimator()
+    void UpdateAnimator(bool grounded, float vVel, bool isMoving, float speedVal)
     {
         if (anim == null) return;
-        
-        bool isMoving = moveDirection.magnitude > 0.1f;
-        bool isFalling = gravityScript != null && gravityScript.verticalVelocity < -2.0f;
-        bool grounded = !isFalling;
-
-        anim.SetBool("OnGround", grounded);
-        // Podczas recovery IsWalking będzie false, co odpali animację Idle
-        anim.SetBool("IsWalking", isMoving && !isRecovering);
-        
-        float speedVal = (currentState == EnemyState.Chase || isDashing) ? 1.0f : (isMoving ? 0.5f : 0f);
-        if (isRecovering) speedVal = 0f;
-
-        anim.SetFloat("speed", speedVal, 0.1f, Time.deltaTime);
-        anim.SetFloat("VerticalVelocity", isFalling ? gravityScript.verticalVelocity : 0f);
+        anim.SetBool(hashOnGround, grounded);
+        anim.SetBool(hashIsWalking, isMoving);
+        anim.SetFloat(hashVertVel, vVel);
+        anim.SetFloat(hashSpeed, speedVal, 0.1f, Time.fixedDeltaTime);
     }
 
-    void HandlePatrol()
-    {
-        if (waypoints.Count == 0 || isWaiting) return;
-        Vector3 target = waypoints[currentWaypointIndex].position;
-        if (Vector2.Distance(new Vector2(transform.position.x, transform.position.z), new Vector2(target.x, target.z)) < 0.8f)
-            StartCoroutine(WaitAtPoint());
-        else
-        {
-            LookAtTarget(target);
-            moveDirection = transform.forward;
-        }
-    }
+    public void EnemyStopAttack() => enemyWeapon?.StopAttack();
 
-    void HandleChase()
+    void OnDrawGizmosSelected()
     {
-        isWaiting = false;
-        LookAtTarget(playerTarget.position);
-        moveDirection = transform.forward;
-    }
-
-    System.Collections.IEnumerator WaitAtPoint()
-    {
-        isWaiting = true;
-        if (waypoints.Count > 0)
-            currentWaypointIndex = (currentWaypointIndex + 1) % waypoints.Count;
-        yield return new WaitForSeconds(waitTimeAtPoint);
-        isWaiting = false;
+        if (eyeTransform == null) return;
+        Gizmos.color = Color.red;
+        Vector3 left = Quaternion.Euler(0, -viewAngle / 2f, 0) * eyeTransform.forward;
+        Vector3 right = Quaternion.Euler(0, viewAngle / 2f, 0) * eyeTransform.forward;
+        Gizmos.DrawRay(eyeTransform.position, left * detectionRange);
+        Gizmos.DrawRay(eyeTransform.position, right * detectionRange);
     }
 }

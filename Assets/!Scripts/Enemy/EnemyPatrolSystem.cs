@@ -12,13 +12,17 @@ public class EnemyPatrolSystem : MonoBehaviour
     public float walkSpeed = 2.0f;
     public float rotationSpeed = 10.0f;
 
+    [Header("Detekcja Ziemi")]
+    public LayerMask groundLayer;
+    public float groundCheckDistance = 0.3f;
+
     private Animator anim;
-    private EnemyGravity gravityScript; 
+    private Rigidbody rb;
     private PullableObject pullable;
     
     private int currentWaypointIndex = 0;
     private bool isWaiting = false;
-    private Vector3 moveDirection = Vector3.zero;
+    private float waitTimer = 0f;
 
     private readonly int hashIsWalking = Animator.StringToHash("IsWalking");
     private readonly int hashOnGround = Animator.StringToHash("OnGround");
@@ -27,8 +31,10 @@ public class EnemyPatrolSystem : MonoBehaviour
     void Start()
     {
         anim = GetComponent<Animator>();
-        gravityScript = GetComponent<EnemyGravity>();
+        rb = GetComponent<Rigidbody>();
         pullable = GetComponent<PullableObject>();
+
+        if (groundLayer == 0) groundLayer = LayerMask.GetMask("Default");
 
         if (waypoints.Count == 0)
         {
@@ -36,84 +42,82 @@ public class EnemyPatrolSystem : MonoBehaviour
         }
     }
 
-    void Update()
+    void FixedUpdate()
     {
-        // Blokada ruchu podczas telekinezy
-        if (pullable != null && pullable.isCaptured) return;
-
-        moveDirection = Vector3.zero;
-
-        HandlePatrol();
-
-        // RUCH POZIOMY
-        transform.position += moveDirection * Time.deltaTime;
-
-        // GRAWITACJA
-        if (gravityScript != null)
+        if (pullable != null && pullable.isCaptured)
         {
-            transform.position += Vector3.up * gravityScript.verticalVelocity * Time.deltaTime;
+            rb.useGravity = false;
+            rb.linearVelocity = Vector3.zero;
+            UpdateAnimator(false, -5.0f, false);
+            return;
         }
 
-        UpdateAnimator();
-    }
+        rb.useGravity = true;
+        bool grounded = CheckIfGrounded();
 
-    void HandlePatrol()
-    {
-        if (waypoints.Count == 0 || isWaiting) return;
-
-        Vector2 enemyPos2D = new Vector2(transform.position.x, transform.position.z);
-        Vector2 targetPos2D = new Vector2(waypoints[currentWaypointIndex].position.x, waypoints[currentWaypointIndex].position.z);
-
-        if (Vector2.Distance(enemyPos2D, targetPos2D) < arrivalDistance)
+        if (waypoints.Count == 0)
         {
-            StartCoroutine(WaitAtPoint());
+            rb.linearVelocity = new Vector3(0, rb.linearVelocity.y, 0);
+            UpdateAnimator(grounded, rb.linearVelocity.y, false);
+            return;
+        }
+
+        if (isWaiting)
+        {
+            waitTimer -= Time.fixedDeltaTime;
+            if (waitTimer <= 0) isWaiting = false;
+            
+            rb.linearVelocity = new Vector3(0, rb.linearVelocity.y, 0);
+            UpdateAnimator(grounded, rb.linearVelocity.y, false);
         }
         else
         {
-            CalculateMoveVector();
+            HandlePatrol(grounded);
         }
     }
 
-    void CalculateMoveVector()
+    void HandlePatrol(bool grounded)
     {
         Vector3 targetPos = waypoints[currentWaypointIndex].position;
-        Vector3 direction = (targetPos - transform.position);
-        direction.y = 0;
+        Vector3 diff = targetPos - transform.position;
+        diff.y = 0;
 
-        if (direction.magnitude > 0.1f)
+        if (diff.magnitude < arrivalDistance)
         {
-            Quaternion targetRot = Quaternion.LookRotation(direction);
-            transform.rotation = Quaternion.Slerp(transform.rotation, targetRot, rotationSpeed * Time.deltaTime);
+            isWaiting = true;
+            waitTimer = waitTimeAtPoint;
+            currentWaypointIndex = (currentWaypointIndex + 1) % waypoints.Count;
+            rb.linearVelocity = new Vector3(0, rb.linearVelocity.y, 0);
+            UpdateAnimator(grounded, rb.linearVelocity.y, false);
+        }
+        else
+        {
+            Quaternion targetRot = Quaternion.LookRotation(diff);
+            rb.MoveRotation(Quaternion.Slerp(rb.rotation, targetRot, rotationSpeed * Time.fixedDeltaTime));
 
-            moveDirection = transform.forward * walkSpeed;
+            Vector3 vel = transform.forward * walkSpeed;
+            vel.y = rb.linearVelocity.y;
+            rb.linearVelocity = vel;
+            UpdateAnimator(grounded, rb.linearVelocity.y, true);
         }
     }
 
-    System.Collections.IEnumerator WaitAtPoint()
+    bool CheckIfGrounded()
     {
-        isWaiting = true;
-        currentWaypointIndex = (currentWaypointIndex + 1) % waypoints.Count;
-        yield return new WaitForSeconds(waitTimeAtPoint);
-        isWaiting = false;
+        return Physics.Raycast(transform.position + Vector3.up * 0.1f, Vector3.down, groundCheckDistance, groundLayer);
     }
 
-    void UpdateAnimator()
+    void UpdateAnimator(bool grounded, float vVel, bool moving)
     {
         if (anim == null) return;
-        
-        bool moving = !isWaiting && waypoints.Count > 0 && (moveDirection.x != 0 || moveDirection.z != 0);
-        bool grounded = (gravityScript != null && Mathf.Abs(gravityScript.verticalVelocity) < 0.5f);
-
         anim.SetBool(hashIsWalking, moving);
         anim.SetBool(hashOnGround, grounded);
-        
-        if (gravityScript != null) 
-            anim.SetFloat(hashVertVel, gravityScript.verticalVelocity);
+        anim.SetFloat(hashVertVel, vVel);
     }
 
     void OnDrawGizmos()
     {
-        if (waypoints == null || waypoints.Count < 2) return;
+        if (waypoints == null || waypoints.Count == 0) return;
         Gizmos.color = Color.cyan;
         for (int i = 0; i < waypoints.Count; i++)
         {
@@ -123,5 +127,7 @@ public class EnemyPatrolSystem : MonoBehaviour
             if (waypoints[nextIndex] != null)
                 Gizmos.DrawLine(waypoints[i].position, waypoints[nextIndex].position);
         }
+        Gizmos.color = Color.yellow;
+        Gizmos.DrawLine(transform.position + Vector3.up * 0.1f, transform.position + Vector3.up * 0.1f + Vector3.down * groundCheckDistance);
     }
 }

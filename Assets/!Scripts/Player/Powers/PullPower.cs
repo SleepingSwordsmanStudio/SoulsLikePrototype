@@ -8,7 +8,6 @@ public class PullPower : MonoBehaviour
     private TelekinesisSystem system;
     private PullableObject currentTarget;
     private Rigidbody targetRb;
-    private EnemyGravity targetGravity; // DODANE: Referencja do skryptu grawitacji
 
     public bool IsActive { get; private set; }
 
@@ -38,20 +37,12 @@ public class PullPower : MonoBehaviour
         {
             IsActive = true;
             targetRb = target.GetComponent<Rigidbody>();
-            targetGravity = target.GetComponent<EnemyGravity>(); // Szukamy skryptu grawitacji
 
-            // 1. ZATRZYMANIE FIZYKI RIGIDBODY
             if (targetRb != null)
             {
                 targetRb.useGravity = false;
-                targetRb.linearVelocity = Vector3.zero; // Pełne zatrzymanie pędu
-            }
-
-            // 2. ZATRZYMANIE SKRYPTU ENEMYGRAVITY
-            if (targetGravity != null)
-            {
-                targetGravity.verticalVelocity = 0f;
-                targetGravity.enabled = false; // WYŁĄCZAMY skrypt, żeby nie przesuwał transform.position
+                targetRb.linearVelocity = Vector3.zero;
+                targetRb.angularVelocity = Vector3.zero;
             }
 
             currentTarget.StartPull(pullAnchor);
@@ -62,18 +53,10 @@ public class PullPower : MonoBehaviour
     {
         IsActive = false;
 
-        // PRZYWRACANIE RIGIDBODY
         if (targetRb != null)
         {
             targetRb.useGravity = true;
             targetRb = null;
-        }
-
-        // PRZYWRACANIE ENEMYGRAVITY
-        if (targetGravity != null)
-        {
-            targetGravity.enabled = true; // Włączamy z powrotem, wróg zacznie spadać
-            targetGravity = null;
         }
 
         if (currentTarget != null)

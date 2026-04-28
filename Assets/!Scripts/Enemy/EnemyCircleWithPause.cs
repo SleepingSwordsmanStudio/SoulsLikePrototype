@@ -10,13 +10,16 @@ public class FinalCirclePatrol : MonoBehaviour
     public float moveTime = 5.0f;
     public float pauseTime = 5.0f;
 
+    [Header("Detekcja Ziemi")]
+    public LayerMask groundLayer;
+    public float groundCheckDistance = 0.3f;
+
     private float timer;
     private bool isWalking = false; 
-    private Vector3 moveDirection = Vector3.zero;
     
     private Animator anim;
-    private EnemyGravity gravityScript; 
-    private PullableObject pullable; // Dodane, aby stopować patrole przy telekinezie
+    private Rigidbody rb;
+    private PullableObject pullable;
 
     private readonly int hashIsWalking = Animator.StringToHash("IsWalking");
     private readonly int hashOnGround = Animator.StringToHash("OnGround");
@@ -25,19 +28,26 @@ public class FinalCirclePatrol : MonoBehaviour
     void Start()
     {
         anim = GetComponent<Animator>();
-        gravityScript = GetComponent<EnemyGravity>(); 
+        rb = GetComponent<Rigidbody>();
         pullable = GetComponent<PullableObject>();
+        
+        if (groundLayer == 0) groundLayer = LayerMask.GetMask("Default");
         timer = pauseTime; 
     }
 
-    void Update()
+    void FixedUpdate()
     {
-        // Jeśli obiekt jest trzymany telekinezą, nie patroluj
-        if (pullable != null && pullable.isCaptured) return;
+        if (pullable != null && pullable.isCaptured)
+        {
+            rb.useGravity = false;
+            rb.linearVelocity = Vector3.zero;
+            UpdateAnimator(false, -5.0f);
+            return;
+        }
 
-        moveDirection = Vector3.zero; 
+        rb.useGravity = true;
 
-        timer -= Time.deltaTime;
+        timer -= Time.fixedDeltaTime;
         if (timer <= 0)
         {
             isWalking = !isWalking;
@@ -46,66 +56,55 @@ public class FinalCirclePatrol : MonoBehaviour
 
         if (isWalking)
         {
-            CalculateCircleMovement();
+            Quaternion deltaRotation = Quaternion.Euler(new Vector3(0, rotationSpeed * Time.fixedDeltaTime, 0));
+            rb.MoveRotation(rb.rotation * deltaRotation);
+
+            Vector3 targetVel = transform.forward * speed;
+            targetVel.y = rb.linearVelocity.y;
+            rb.linearVelocity = targetVel;
         }
-
-        // RUCH POZIOMY
-        transform.position += moveDirection * Time.deltaTime;
-
-        // GRAWITACJA (z zewnętrznego skryptu)
-        if (gravityScript != null)
+        else
         {
-            transform.position += Vector3.up * gravityScript.verticalVelocity * Time.deltaTime;
+            rb.linearVelocity = new Vector3(0, rb.linearVelocity.y, 0);
         }
 
-        UpdateAnimator(); 
+        UpdateAnimator(CheckIfGrounded(), rb.linearVelocity.y);
     }
 
-    void CalculateCircleMovement()
+    bool CheckIfGrounded()
     {
-        transform.Rotate(0, rotationSpeed * Time.deltaTime, 0);
-        moveDirection = transform.forward * speed;
+        return Physics.Raycast(transform.position + Vector3.up * 0.1f, Vector3.down, groundCheckDistance, groundLayer);
     }
 
-    void UpdateAnimator()
+    void UpdateAnimator(bool grounded, float vVel)
     {
         if (anim == null) return;
         
-        // Sprawdzamy uziemienie przez skrypt grawitacji (brak CC)
-        bool grounded = (gravityScript != null && Mathf.Abs(gravityScript.verticalVelocity) < 0.5f);
-        
         anim.SetBool(hashIsWalking, isWalking);
         anim.SetBool(hashOnGround, grounded);
-
-        if (gravityScript != null)
-        {
-            anim.SetFloat(hashVertVel, gravityScript.verticalVelocity);
-        }
+        anim.SetFloat(hashVertVel, vVel);
     }
 
-    // --- GIZMOSY --- (Bez zmian w logice rysowania)
     void OnDrawGizmos()
     {
         Gizmos.color = Color.magenta;
         float turnInRadians = rotationSpeed * Mathf.Deg2Rad;
         if (Mathf.Abs(turnInRadians) < 0.001f) return;
         float calculatedRadius = speed / turnInRadians;
-        Vector3 centerSide = transform.right * calculatedRadius;
-        Vector3 predictedCenter = transform.position + centerSide;
-        DrawCircle(predictedCenter, calculatedRadius);
-    }
-
-    void DrawCircle(Vector3 center, float r)
-    {
+        Vector3 predictedCenter = transform.position + transform.right * calculatedRadius;
+        
         float segments = 30; 
         float angleStep = 360f / segments;
-        Vector3 prevPoint = center + new Vector3(r, 0, 0);
+        Vector3 prevPoint = predictedCenter + new Vector3(calculatedRadius, 0, 0);
         for (int i = 1; i <= segments; i++)
         {
             float a = i * angleStep * Mathf.Deg2Rad;
-            Vector3 nextPoint = center + new Vector3(Mathf.Cos(a) * r, 0, Mathf.Sin(a) * r);
+            Vector3 nextPoint = predictedCenter + new Vector3(Mathf.Cos(a) * calculatedRadius, 0, Mathf.Sin(a) * calculatedRadius);
             Gizmos.DrawLine(prevPoint, nextPoint);
             prevPoint = nextPoint;
         }
+
+        Gizmos.color = Color.yellow;
+        Gizmos.DrawLine(transform.position + Vector3.up * 0.1f, transform.position + Vector3.up * 0.1f + Vector3.down * groundCheckDistance);
     }
 }
